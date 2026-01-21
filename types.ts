@@ -8,6 +8,11 @@ export interface MarketOdds {
   odds: number;
 }
 
+export interface GroundingUrl {
+  title: string;
+  uri: string;
+}
+
 export interface Match {
   id: string;
   sport: SportType;
@@ -15,6 +20,7 @@ export interface Match {
   awayTeam: string;
   league: string;
   startTime: string;
+  grounding_urls?: GroundingUrl[];
   match_context: {
     injuries: { player: string; status: string; importance: string }[];
     recent_form: { home: string; away: string; };
@@ -42,6 +48,7 @@ export interface UserSelection {
   sport: SportType;
   market_type: 'WDL' | 'WDHL' | 'CS' | 'TG' | 'TOTALS';
   pick: string;
+  odds: number; // 选定选项的赔率
 }
 
 export interface Optimization {

@@ -1,34 +1,40 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { UserSelection, Match, AuditResponse, DataSource } from "../types";
+import { UserSelection, Match, AuditResponse, DataSource, GroundingUrl } from "../types";
 import { SYSTEM_INSTRUCTION } from "../constants";
 
 const TIMEOUT_MS = 35000;
 
+/**
+ * Fetches match data using Gemini with Google Search tool.
+ * Prompts the model specifically for upcoming (not started) matches.
+ */
 export const fetchLotteryMatches = async (source: DataSource, onStatusUpdate?: (status: string) => void): Promise<Match[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const today = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
 
   const officialPrompt = `
-    搜索今天 (${today}) 的中国竞彩足球和篮球开售赛事及赔率。
-    来源: 竞彩网 (sporttery.cn), 500.com, okooo.com.
+    搜索当前（北京时间 ${now.toLocaleString()}）中国竞彩足球和篮球【已开盘】且【尚未开始】的所有赛事。
+    必须过滤掉已经结束或正在进行的比赛，仅保留未来进行的赛事。
+    
+    来源参考: 竞彩网 (sporttery.cn), 500.com, okooo.com.
     
     要求:
-    1. 足球: 提供胜平负(WDL)、让球胜平负(WDHL)、进球数(0-7+)、以及所有可用的比分(波胆)赔率。
+    1. 足球: WDL、WDHL、总进球、比分赔率。
     2. 篮球: 让分盘和大小分。
     3. 必须包含竞彩 ID (如 周一001)。
-    4. 所有的球队名称、联赛名称、环境描述必须翻译成【简体中文】。
+    4. 球队名、联赛名必须翻译成【简体中文】。
     
-    以 JSON 数组形式返回 Match 对象，不要包含任何解释。
+    以 JSON 数组形式返回 Match 对象。
   `;
 
   const internationalPrompt = `
-    搜索今天 (${today}) 国际主流博彩公司 (Bet365, Pinnacle) 的顶级赛事赔率。
-    提供 WDL、让球盘、进球数和比分赔率。
+    搜索当前（${now.toLocaleString()}）国际主流市场 (Bet365, Pinnacle) 的顶级赛事。
+    仅抓取【尚未开始】的比赛赔率。
     
     要求:
-    1. 将国际赔率格式转换为中国竞彩标准。
-    2. 所有的球队、联赛名、趋势描述必须翻译成【简体中文】。
+    1. 转换国际赔率为中国竞彩标准格式。
+    2. 球队、联赛名翻译为【简体中文】。
     
     以 JSON 数组形式返回 Match 对象。
   `;
@@ -36,6 +42,7 @@ export const fetchLotteryMatches = async (source: DataSource, onStatusUpdate?: (
   const performFetch = async (prompt: string, status: string): Promise<Match[]> => {
     try {
       onStatusUpdate?.(status);
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: prompt,
@@ -84,10 +91,20 @@ export const fetchLotteryMatches = async (source: DataSource, onStatusUpdate?: (
         },
       });
 
+      // Maintain grounding data internally for compliance but will be hidden in UI
+      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      const groundingUrls: GroundingUrl[] = groundingChunks?.map((chunk: any) => chunk.web).filter(Boolean) || [];
+
       const text = response.text;
       if (!text) return [];
+      
       const cleanedJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      return JSON.parse(cleanedJson);
+      const matches: Match[] = JSON.parse(cleanedJson);
+      
+      return matches.map(m => ({
+        ...m,
+        grounding_urls: groundingUrls
+      }));
     } catch (e) {
       console.error("Fetch implementation error:", e);
       return [];
@@ -96,7 +113,7 @@ export const fetchLotteryMatches = async (source: DataSource, onStatusUpdate?: (
 
   try {
     const prompt = source === 'OFFICIAL' ? officialPrompt : internationalPrompt;
-    const fetchPromise = performFetch(prompt, source === 'OFFICIAL' ? "正在同步竞彩中心数据..." : "正在链接全球博彩市场数据...");
+    const fetchPromise = performFetch(prompt, source === 'OFFICIAL' ? "正在抓取最新开盘赛程..." : "正在同步全球市场数据...");
     const timeoutPromise = new Promise<Match[]>((_, reject) => setTimeout(() => reject(new Error("TIMEOUT")), TIMEOUT_MS));
     
     return await Promise.race([fetchPromise, timeoutPromise]);
@@ -105,6 +122,9 @@ export const fetchLotteryMatches = async (source: DataSource, onStatusUpdate?: (
   }
 };
 
+/**
+ * Audit user portfolio using Gemini 3 Pro model.
+ */
 export const auditPortfolio = async (portfolio: UserSelection[], matches: Match[]): Promise<AuditResponse> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const matchContext = portfolio.map(item => {
@@ -119,12 +139,21 @@ export const auditPortfolio = async (portfolio: UserSelection[], matches: Match[
 
   const response = await ai.models.generateContent({
     model: "gemini-3-pro-preview",
-    contents: `请使用【简体中文】审计以下投注：\n组合：${JSON.stringify(portfolio)}\n实时环境数据：${JSON.stringify(matchContext)}`,
+    contents: `请对以下投注方案进行深度风控审计。
+    
+    【投注组合】：
+    ${JSON.stringify(portfolio)}
+    
+    【赛况背景数据】：
+    ${JSON.stringify(matchContext)}`,
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
       responseMimeType: "application/json"
     },
   });
 
-  return JSON.parse(response.text.replace(/```json/g, '').replace(/```/g, '').trim());
+  const text = response.text;
+  if (!text) throw new Error("AI returned empty content");
+  
+  return JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
 };
