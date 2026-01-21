@@ -1,5 +1,6 @@
 
 export type SportType = 'FOOTBALL' | 'BASKETBALL';
+export type DataSource = 'OFFICIAL' | 'INTERNATIONAL';
 
 export interface MarketOdds {
   label: string;
@@ -19,20 +20,15 @@ export interface Match {
     recent_form: { home: string; away: string; };
     international_odds: {
       wdl: { h: number; d: number; a: number }; // 胜平负
+      wdhl?: { h: number; d: number; a: number; handicap: number }; // 让球胜平负
       totals_odds?: { over: number; under: number }; // 大小分赔率
+      total_goals?: MarketOdds[]; // 总进球 (0, 1, 2... 7+)
       trend: string;
-      kelly_index?: { h: number; d: number; a: number }; // 凯利指数
     };
     markets: {
-      correct_score?: MarketOdds[]; // 波胆
-      handicap?: string; // 让球数/盘口
-      totals?: string; // 总分盘口 (e.g., "225.5")
-    };
-    stats: {
-      home_off_rating?: number;
-      away_def_rating?: number;
-      goal_avg_home?: number;
-      goal_avg_away?: number;
+      correct_score?: MarketOdds[]; // 全量波胆
+      handicap?: string; // 让球数 (e.g. "-1")
+      totals?: string; // 总分盘口
     };
     league_rank: { home: number; away: number; };
     motivation_level: "High" | "Medium" | "Low";
@@ -44,7 +40,7 @@ export interface UserSelection {
   match_id: string;
   match_name: string;
   sport: SportType;
-  market_type: 'WDL' | 'CS' | 'TOTALS';
+  market_type: 'WDL' | 'WDHL' | 'CS' | 'TG' | 'TOTALS';
   pick: string;
 }
 
