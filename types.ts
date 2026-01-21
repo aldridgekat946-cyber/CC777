@@ -19,12 +19,14 @@ export interface Match {
     recent_form: { home: string; away: string; };
     international_odds: {
       wdl: { h: number; d: number; a: number }; // 胜平负
+      totals_odds?: { over: number; under: number }; // 大小分赔率
       trend: string;
       kelly_index?: { h: number; d: number; a: number }; // 凯利指数
     };
     markets: {
       correct_score?: MarketOdds[]; // 波胆
       handicap?: string; // 让球数/盘口
+      totals?: string; // 总分盘口 (e.g., "225.5")
     };
     stats: {
       home_off_rating?: number;
@@ -42,7 +44,7 @@ export interface UserSelection {
   match_id: string;
   match_name: string;
   sport: SportType;
-  market_type: 'WDL' | 'CS' | 'TOTALS'; // Removed HTFT
+  market_type: 'WDL' | 'CS' | 'TOTALS';
   pick: string;
 }
 

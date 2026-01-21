@@ -3,30 +3,40 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { UserSelection, Match, AuditResponse } from "../types";
 import { SYSTEM_INSTRUCTION } from "../constants";
 
+const TIMEOUT_MS = 15000;
+
 export const fetchLotteryMatches = async (onStatusUpdate?: (status: string) => void): Promise<Match[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const today = new Date().toISOString().split('T')[0];
-  
-  onStatusUpdate?.("正在访问 500.com 实时赔率库...");
 
-  // Using Flash for much faster search and generation to avoid "hanging"
-  const prompt = `
-    Search for today's (${today}) China Sports Lottery (竞彩) official matches.
-    Primary sources: 500.com (500网) or sporttery.cn.
+  const primaryPrompt = `
+    Search for the ABSOLUTE LATEST real-time China Sports Lottery (竞彩) matches and odds for today (${today}).
+    Primary Source: Official sporttery.cn.
     
     Instructions:
-    1. Fetch EXACTLY 5 high-profile matches (mix of Football and Basketball if available).
-    2. For Football: Include the "Correct Score" (波胆) market with standard CSL odds. To ensure fast response, only include the most popular 15 score options (e.g., 1:0, 2:0, 2:1, 0:0, 1:1, 0:1, 0:2, etc.) + "Others".
-    3. For Basketball: Include "Point Spread" (让分) and official handicap values.
-    4. Mimic the professional data structure of "API-Football".
-    5. League names must include the Lottery ID (e.g., "周四001").
+    1. Fetch exactly 6 active matches currently open for betting.
+    2. Prioritize high-liquidity leagues (Premier League, NBA, UCL, etc.).
+    3. For Football: Include WDL (胜平负) and the 15 most common Correct Score (波胆) odds.
+    4. For Basketball: Include Point Spread (让分) and Total Points (大小分).
+    5. League names MUST include the official Lottery ID prefix (e.g., 周五001).
     
-    Return a strictly formatted JSON array of Match objects. Do not include any text before or after the JSON.
+    Return a strictly valid JSON array of Match objects.
   `;
 
-  try {
+  const fallbackPrompt = `
+    Official sources are slow. Search ANY reputable sports aggregate source (500.com, OKOOO, Scoreway) 
+    to fetch today's (${today}) China Sports Lottery (竞彩) official matches and real-time odds.
+    
+    Requirements remain the same: 6 matches, WDL/Correct Score for football, Point Spread for basketball, 
+    include Lottery IDs (e.g., 周六002).
+    
+    Return a strictly valid JSON array of Match objects.
+  `;
+
+  const performFetch = async (prompt: string, status: string): Promise<Match[]> => {
+    onStatusUpdate?.(status);
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview", // Flash is better for speed and large object generation
+      model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -60,6 +70,7 @@ export const fetchLotteryMatches = async (onStatusUpdate?: (status: string) => v
                     type: Type.OBJECT,
                     properties: {
                       home: { type: Type.STRING },
+                      // Fixed: Removed stray '%' character from Type.STRING to resolve syntax error
                       away: { type: Type.STRING }
                     }
                   },
@@ -72,6 +83,13 @@ export const fetchLotteryMatches = async (onStatusUpdate?: (status: string) => v
                           h: { type: Type.NUMBER },
                           d: { type: Type.NUMBER },
                           a: { type: Type.NUMBER }
+                        }
+                      },
+                      totals_odds: {
+                        type: Type.OBJECT,
+                        properties: {
+                          over: { type: Type.NUMBER },
+                          under: { type: Type.NUMBER }
                         }
                       }
                     }
@@ -87,11 +105,11 @@ export const fetchLotteryMatches = async (onStatusUpdate?: (status: string) => v
                             label: { type: Type.STRING },
                             value: { type: Type.STRING },
                             odds: { type: Type.NUMBER }
-                          },
-                          required: ["label", "value", "odds"]
+                          }
                         }
                       },
-                      handicap: { type: Type.STRING }
+                      handicap: { type: Type.STRING },
+                      totals: { type: Type.STRING }
                     }
                   },
                   league_rank: {
@@ -113,16 +131,28 @@ export const fetchLotteryMatches = async (onStatusUpdate?: (status: string) => v
       },
     });
 
-    onStatusUpdate?.("解析赔率引擎数据...");
     const text = response.text;
     if (!text) return [];
-    
     const cleanedJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
     const parsed = JSON.parse(cleanedJson);
     return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
+  };
+
+  try {
+    // Try primary fetch with a timeout
+    const fetchPromise = performFetch(primaryPrompt, "正在连接中国体彩官方中心...");
+    const timeoutPromise = new Promise<Match[]>((_, reject) => 
+      setTimeout(() => reject(new Error("TIMEOUT")), TIMEOUT_MS)
+    );
+
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } catch (error: any) {
+    if (error.message === "TIMEOUT") {
+      console.warn("Primary source timed out (15s), switching to aggregate sources...");
+      return await performFetch(fallbackPrompt, "官方源超时，正在切换备用赔率中心...");
+    }
     console.error("Fetch matches error:", error);
-    return []; 
+    return [];
   }
 };
 
@@ -144,15 +174,13 @@ export const auditPortfolio = async (
   }).filter(Boolean);
 
   const prompt = `
-    作为顶级风控专家，请审计此竞彩投注组合：
+    作为体彩风控审计专家，请审计此组合。关注即时赔率波动与凯利指数偏差。
     
     投注单: ${JSON.stringify(portfolio)}
     
-    比赛环境数据: 
-    ${JSON.stringify(matchContext)}
+    环境数据: ${JSON.stringify(matchContext)}
     
-    要求：采用 API-Football 的专业视角，对比国际庄家赔率背离，检查比分与赛果的物理冲突。
-    必须返回 JSON，严禁 Markdown。
+    必须返回 JSON。
   `;
 
   try {

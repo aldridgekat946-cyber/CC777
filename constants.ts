@@ -57,10 +57,12 @@ export const MOCK_MATCHES: Match[] = [
       recent_form: { home: "L-L-W", away: "W-W-L" },
       international_odds: {
         wdl: { h: 2.35, d: 0, a: 1.65 },
+        totals_odds: { over: 1.85, under: 1.85 },
         trend: "离散度增加，湖人受让分盘持续受热"
       },
       markets: {
-        handicap: "主+4.5"
+        handicap: "主+4.5",
+        totals: "225.5"
       },
       stats: { home_off_rating: 105.2, away_def_rating: 110.5 },
       league_rank: { home: 9, away: 10 },

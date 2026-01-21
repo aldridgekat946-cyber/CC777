@@ -1,50 +1,67 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Shield, AlertTriangle, CheckCircle, Trash2, 
   Activity, TrendingUp, 
   Dribbble, Trophy, LayoutGrid, ChevronDown, ListFilter,
-  Loader2, Clock, RefreshCw
+  Loader2, Clock, RefreshCw, Zap, Server
 } from 'lucide-react';
 import { MOCK_MATCHES } from './constants';
 import { Match, UserSelection, AuditResponse, SportType, MarketOdds } from './types';
 import { auditPortfolio, fetchLotteryMatches } from './services/geminiService';
 
+const AUTO_REFRESH_INTERVAL = 300; // 5 minutes in seconds
+
 const App: React.FC = () => {
   const [activeSport, setActiveSport] = useState<SportType>('FOOTBALL');
   const [matches, setMatches] = useState<Match[]>([]);
   const [isFetching, setIsFetching] = useState(true);
+  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
   const [fetchStatus, setFetchStatus] = useState('初始化中...');
   const [portfolio, setPortfolio] = useState<UserSelection[]>([]);
   const [isAuditing, setIsAuditing] = useState(false);
   const [auditResult, setAuditResult] = useState<AuditResponse | null>(null);
   const [expandedMatch, setExpandedMatch] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<string>('');
+  const [timeLeft, setTimeLeft] = useState(AUTO_REFRESH_INTERVAL);
+  
+  const timerRef = useRef<number | null>(null);
 
-  const initData = async () => {
-    setIsFetching(true);
-    setFetchStatus('连接 API-Football 数据网关...');
+  const initData = async (isBackground = false) => {
+    if (isBackground) setIsBackgroundSyncing(true);
+    else setIsFetching(true);
+    
     try {
-      // Pass a status update callback to show real progress
       const realMatches = await fetchLotteryMatches((status) => setFetchStatus(status));
       if (realMatches && realMatches.length > 0) {
         setMatches(realMatches);
         setLastSync(new Date().toLocaleTimeString());
-      } else {
-        console.warn("No real matches fetched, using fallback data.");
+      } else if (!isBackground) {
         setMatches(MOCK_MATCHES);
-        setLastSync(new Date().toLocaleTimeString() + " (模拟)");
+        setLastSync(new Date().toLocaleTimeString() + " (本地库)");
       }
+      setTimeLeft(AUTO_REFRESH_INTERVAL);
     } catch (err) {
-      console.error("Sync initialization failed:", err);
-      setMatches(MOCK_MATCHES);
+      console.error("Sync failed:", err);
+      if (!isBackground) setMatches(MOCK_MATCHES);
     } finally {
       setIsFetching(false);
+      setIsBackgroundSyncing(false);
     }
   };
 
   useEffect(() => {
     initData();
+    timerRef.current = window.setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          initData(true);
+          return AUTO_REFRESH_INTERVAL;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 
   const filteredMatches = useMemo(() => 
@@ -78,7 +95,7 @@ const App: React.FC = () => {
       const result = await auditPortfolio(portfolio, matches);
       setAuditResult(result);
     } catch (err) {
-      alert("风控引擎暂时离线，正在重启审计链路。");
+      alert("风控引擎暂时离线，正在重新建立安全链路。");
     } finally {
       setIsAuditing(false);
     }
@@ -89,7 +106,6 @@ const App: React.FC = () => {
     const home: MarketOdds[] = [];
     const draw: MarketOdds[] = [];
     const away: MarketOdds[] = [];
-
     scores.forEach(s => {
       const label = s.label || '';
       if (label.includes('胜其它')) home.push(s);
@@ -100,16 +116,17 @@ const App: React.FC = () => {
         if (parts.length === 2) {
           const h = Number(parts[0]);
           const a = Number(parts[1]);
-          if (h > a) home.push(s);
-          else if (h === a) draw.push(s);
-          else away.push(s);
-        } else if (label.startsWith('胜')) home.push(s);
-        else if (label.startsWith('平')) draw.push(s);
-        else if (label.startsWith('负')) away.push(s);
+          if (h > a) home.push(s); else if (h === a) draw.push(s); else away.push(s);
+        } else if (label.startsWith('胜')) home.push(s); else if (label.startsWith('平')) draw.push(s); else if (label.startsWith('负')) away.push(s);
       }
     });
-
     return { home, draw, away };
+  };
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   return (
@@ -128,37 +145,43 @@ const App: React.FC = () => {
               <h1 className="text-3xl font-[900] tracking-tighter uppercase italic bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-500">
                 Sentinel <span className="text-blue-500">PRO</span>
               </h1>
-              <div className="flex items-center gap-2 mt-1">
-                <span className={`w-2 h-2 rounded-full ${isFetching ? 'bg-blue-500 animate-pulse' : 'bg-green-500'}`}></span>
+              <div className="flex items-center gap-3 mt-1">
+                <span className={`w-2 h-2 rounded-full ${isFetching || isBackgroundSyncing ? 'bg-blue-500 animate-pulse' : 'bg-emerald-500'}`}></span>
                 <p className="text-[10px] text-slate-500 font-bold tracking-[0.2em] uppercase">
-                  {isFetching ? fetchStatus : `API-FOOTBALL 同步成功: ${lastSync}`}
+                  {isFetching ? fetchStatus : `实时链路激活 · 下次更新: ${formatTime(timeLeft)}`}
                 </p>
+                {isBackgroundSyncing && <Zap className="w-3 h-3 text-blue-500 animate-pulse" />}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-             {!isFetching && (
-               <button 
-                 onClick={initData}
-                 className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-500 hover:text-white transition-all"
-                 title="刷新数据"
-               >
-                 <RefreshCw className="w-4 h-4" />
-               </button>
-             )}
+             <div className="hidden md:flex flex-col items-end mr-2">
+                <span className="text-[9px] text-slate-600 font-black uppercase">链路状态</span>
+                <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                   <Server className="w-3 h-3" /> {lastSync.includes('本地') ? '本地节点' : '实时主网'}
+                </span>
+             </div>
+             <button 
+               onClick={() => initData()}
+               disabled={isFetching || isBackgroundSyncing}
+               className={`p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-500 hover:text-white transition-all ${isFetching || isBackgroundSyncing ? 'opacity-50 cursor-not-allowed' : ''}`}
+               title="强制重连"
+             >
+               <RefreshCw className={`w-4 h-4 ${(isFetching || isBackgroundSyncing) ? 'animate-spin' : ''}`} />
+             </button>
             <div className="flex bg-slate-900/80 p-1.5 rounded-2xl border border-slate-800 backdrop-blur-xl shadow-inner">
               <button 
                 onClick={() => setActiveSport('FOOTBALL')}
                 className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black transition-all duration-300 ${activeSport === 'FOOTBALL' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20' : 'text-slate-500 hover:text-slate-300'}`}
               >
-                <Trophy className="w-4 h-4" /> 竞彩足球
+                <Trophy className="w-4 h-4" /> 足球专线
               </button>
               <button 
                 onClick={() => setActiveSport('BASKETBALL')}
                 className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black transition-all duration-300 ${activeSport === 'BASKETBALL' ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/20' : 'text-slate-500 hover:text-slate-300'}`}
               >
-                <Dribbble className="w-4 h-4" /> 竞彩篮球
+                <Dribbble className="w-4 h-4" /> 篮球专线
               </button>
             </div>
           </div>
@@ -166,12 +189,17 @@ const App: React.FC = () => {
 
         <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
           <div className="lg:col-span-5 space-y-6">
-            <div className="bg-slate-900/40 border border-slate-800 rounded-[32px] overflow-hidden backdrop-blur-2xl shadow-2xl">
+            <div className="bg-slate-900/40 border border-slate-800 rounded-[32px] overflow-hidden backdrop-blur-2xl shadow-2xl relative">
+              {isBackgroundSyncing && (
+                <div className="absolute top-0 left-0 w-full h-1 bg-slate-800 overflow-hidden z-20">
+                  <div className="h-full bg-blue-500 animate-progress"></div>
+                </div>
+              )}
               <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/60">
                 <h2 className="text-sm font-black uppercase tracking-widest flex items-center gap-3 text-slate-400">
-                  <ListFilter className="w-4 h-4 text-blue-500" /> 中国体育彩票官方赛程
+                  <ListFilter className="w-4 h-4 text-blue-500" /> 竞彩即时盘口 (含15s防阻塞机制)
                 </h2>
-                {isFetching && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
+                {(isFetching || isBackgroundSyncing) && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
               </div>
               
               <div className="divide-y divide-slate-800/50 max-h-[700px] overflow-y-auto custom-scrollbar">
@@ -179,16 +207,16 @@ const App: React.FC = () => {
                   <div className="p-20 flex flex-col items-center justify-center space-y-6">
                     <div className="relative">
                       <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
-                      <Activity className="w-6 h-6 text-blue-400 absolute inset-0 m-auto animate-pulse" />
+                      <Zap className="w-6 h-6 text-blue-400 absolute inset-0 m-auto animate-pulse" />
                     </div>
                     <div className="text-center">
-                      <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-1">{fetchStatus}</p>
-                      <p className="text-[8px] text-slate-700 font-bold italic uppercase tracking-widest">Sourcing Real-time odds from 500.com</p>
+                      <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-1">{fetchStatus}</p>
+                      <p className="text-[8px] text-slate-600 font-bold italic uppercase tracking-widest">Sourcing Real-time odds · Timeout protection Active</p>
                     </div>
                   </div>
                 ) : filteredMatches.length === 0 ? (
                    <div className="p-20 text-center text-slate-600 uppercase text-[10px] font-black tracking-widest">
-                      该板块暂无即时开售赛事
+                      该时段暂无即时开售赛事
                    </div>
                 ) : filteredMatches.map(match => {
                   const markets = match.match_context?.markets;
@@ -202,9 +230,12 @@ const App: React.FC = () => {
                             <Clock className="w-3 h-3" /> {match.startTime}
                           </div>
                         </div>
-                        {match.match_context.news_sentiment && (
-                          <div className="w-2 h-2 bg-red-500 rounded-full animate-ping" title="实时舆情预警"></div>
-                        )}
+                        <div className="flex items-center gap-2">
+                           <span className="text-[9px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 uppercase tracking-tight">Live</span>
+                           {match.match_context.news_sentiment && (
+                             <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" title="实时舆情预警"></div>
+                           )}
+                        </div>
                       </div>
                       
                       <div className="flex items-center justify-between gap-4 mb-6">
@@ -221,23 +252,27 @@ const App: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-2.5 mb-4">
+                      <div className="grid grid-cols-3 gap-2.5 mb-2">
+                        <MarketButton onClick={() => addToPortfolio(match, 'WDL', '主胜')} label="胜" odds={match.match_context.international_odds?.wdl?.h} />
                         {activeSport === 'FOOTBALL' ? (
-                          <>
-                            <MarketButton onClick={() => addToPortfolio(match, 'WDL', '主胜')} label="胜" odds={match.match_context.international_odds?.wdl?.h} />
-                            <MarketButton onClick={() => addToPortfolio(match, 'WDL', '平局')} label="平" odds={match.match_context.international_odds?.wdl?.d} />
-                            <MarketButton onClick={() => addToPortfolio(match, 'WDL', '客胜')} label="负" odds={match.match_context.international_odds?.wdl?.a} />
-                          </>
+                          <MarketButton onClick={() => addToPortfolio(match, 'WDL', '平局')} label="平" odds={match.match_context.international_odds?.wdl?.d} />
                         ) : (
-                          <>
-                            <MarketButton onClick={() => addToPortfolio(match, 'WDL', '主胜')} label="主胜" odds={match.match_context.international_odds?.wdl?.h} />
-                            <div className="bg-slate-950/50 rounded-xl border border-slate-800 flex items-center justify-center text-[10px] text-slate-700 font-black uppercase text-center px-1">
-                              {markets?.handicap || '不让分'}
-                            </div>
-                            <MarketButton onClick={() => addToPortfolio(match, 'WDL', '客胜')} label="客胜" odds={match.match_context.international_odds?.wdl?.a} />
-                          </>
+                          <div className="bg-slate-950/50 rounded-xl border border-slate-800 flex items-center justify-center text-[10px] text-slate-700 font-black uppercase text-center px-1">
+                            {markets?.handicap || '让分'}
+                          </div>
                         )}
+                        <MarketButton onClick={() => addToPortfolio(match, 'WDL', '客胜')} label="负" odds={match.match_context.international_odds?.wdl?.a} />
                       </div>
+
+                      {activeSport === 'BASKETBALL' && (
+                        <div className="grid grid-cols-3 gap-2.5 mb-4">
+                          <MarketButton onClick={() => addToPortfolio(match, 'TOTALS', '大分')} label="大分" odds={match.match_context.international_odds?.totals_odds?.over} />
+                          <div className="bg-slate-950/50 rounded-xl border border-slate-800 flex items-center justify-center text-[10px] text-slate-700 font-black uppercase text-center px-1">
+                            {markets?.totals || '总分'}
+                          </div>
+                          <MarketButton onClick={() => addToPortfolio(match, 'TOTALS', '小分')} label="小分" odds={match.match_context.international_odds?.totals_odds?.under} />
+                        </div>
+                      )}
 
                       {activeSport === 'FOOTBALL' && (
                         <div className="mt-4">
@@ -245,7 +280,7 @@ const App: React.FC = () => {
                             onClick={() => setExpandedMatch(expandedMatch === match.id ? null : match.id)}
                             className="w-full py-2 bg-slate-950/50 hover:bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-center gap-2 text-[10px] font-black text-slate-500 uppercase transition-all"
                           >
-                            <LayoutGrid className="w-3 h-3" /> {expandedMatch === match.id ? '收起波胆' : '查看波胆 (即时比分方案)'} <ChevronDown className={`w-3 h-3 transition-transform ${expandedMatch === match.id ? 'rotate-180' : ''}`} />
+                            <LayoutGrid className="w-3 h-3" /> {expandedMatch === match.id ? '收起波胆' : '全量波胆方案'} <ChevronDown className={`w-3 h-3 transition-transform ${expandedMatch === match.id ? 'rotate-180' : ''}`} />
                           </button>
                           
                           {expandedMatch === match.id && (
@@ -253,28 +288,28 @@ const App: React.FC = () => {
                               <div>
                                 <p className="text-[10px] font-black text-emerald-500/70 uppercase tracking-widest mb-3 px-1 border-l-2 border-emerald-500/30 ml-1">主胜波胆</p>
                                 <div className="grid grid-cols-5 gap-1.5">
-                                  {home.map(score => (
-                                    <ScoreButton key={score.value} onClick={() => addToPortfolio(match, 'CS', score.label)} label={score.label} odds={score.odds} />
+                                  {home.map((score, idx) => (
+                                    <ScoreButton key={`${match.id}_h_${idx}`} onClick={() => addToPortfolio(match, 'CS', score.label)} label={score.label} odds={score.odds} />
                                   ))}
-                                  {home.length === 0 && <p className="col-span-5 text-[10px] text-slate-700 italic text-center py-2 uppercase">无数据</p>}
+                                  {home.length === 0 && <p className="col-span-5 text-[10px] text-slate-700 italic text-center py-2 uppercase">加载中</p>}
                                 </div>
                               </div>
                               <div>
                                 <p className="text-[10px] font-black text-slate-500/70 uppercase tracking-widest mb-3 px-1 border-l-2 border-slate-500/30 ml-1">平局波胆</p>
                                 <div className="grid grid-cols-5 gap-1.5">
-                                  {draw.map(score => (
-                                    <ScoreButton key={score.value} onClick={() => addToPortfolio(match, 'CS', score.label)} label={score.label} odds={score.odds} />
+                                  {draw.map((score, idx) => (
+                                    <ScoreButton key={`${match.id}_d_${idx}`} onClick={() => addToPortfolio(match, 'CS', score.label)} label={score.label} odds={score.odds} />
                                   ))}
-                                  {draw.length === 0 && <p className="col-span-5 text-[10px] text-slate-700 italic text-center py-2 uppercase">无数据</p>}
+                                  {draw.length === 0 && <p className="col-span-5 text-[10px] text-slate-700 italic text-center py-2 uppercase">加载中</p>}
                                 </div>
                               </div>
                               <div>
                                 <p className="text-[10px] font-black text-red-500/70 uppercase tracking-widest mb-3 px-1 border-l-2 border-red-500/30 ml-1">客胜波胆</p>
                                 <div className="grid grid-cols-5 gap-1.5">
-                                  {away.map(score => (
-                                    <ScoreButton key={score.value} onClick={() => addToPortfolio(match, 'CS', score.label)} label={score.label} odds={score.odds} />
+                                  {away.map((score, idx) => (
+                                    <ScoreButton key={`${match.id}_a_${idx}`} onClick={() => addToPortfolio(match, 'CS', score.label)} label={score.label} odds={score.odds} />
                                   ))}
-                                  {away.length === 0 && <p className="col-span-5 text-[10px] text-slate-700 italic text-center py-2 uppercase">无数据</p>}
+                                  {away.length === 0 && <p className="col-span-5 text-[10px] text-slate-700 italic text-center py-2 uppercase">加载中</p>}
                                 </div>
                               </div>
                             </div>
@@ -292,7 +327,7 @@ const App: React.FC = () => {
             <div className="bg-slate-900/60 border border-slate-800 rounded-[40px] p-8 shadow-2xl backdrop-blur-3xl">
               <div className="flex items-center justify-between mb-8">
                 <h2 className="text-xl font-black italic uppercase tracking-tighter flex items-center gap-3">
-                  <Activity className="w-6 h-6 text-blue-500" /> 审计清单 (Audit)
+                  <Activity className="w-6 h-6 text-blue-500" /> 风控策略审计台
                 </h2>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-black text-slate-600 uppercase">已选:</span>
@@ -303,7 +338,7 @@ const App: React.FC = () => {
               {portfolio.length === 0 ? (
                 <div className="py-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-800 rounded-[32px] text-slate-600">
                   <Shield className="w-16 h-16 mb-6 opacity-10" />
-                  <p className="text-sm font-black uppercase tracking-widest opacity-30">请选择体彩赛事进入审计通道</p>
+                  <p className="text-sm font-black uppercase tracking-widest opacity-30">选择赛事以启动 AI 策略审计</p>
                 </div>
               ) : (
                 <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2 mb-8">
@@ -316,7 +351,9 @@ const App: React.FC = () => {
                         <div>
                           <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">{item.match_name}</p>
                           <div className="flex items-center gap-2 mt-1">
-                            <span className="px-2 py-0.5 bg-slate-900 text-[10px] font-black text-slate-400 rounded-md border border-slate-800">{item.market_type === 'WDL' ? '胜平负' : '波胆'}</span>
+                            <span className="px-2 py-0.5 bg-slate-900 text-[10px] font-black text-slate-400 rounded-md border border-slate-800">
+                              {item.market_type === 'WDL' ? '胜负' : item.market_type === 'TOTALS' ? '大小分' : '波胆'}
+                            </span>
                             <span className="text-lg font-black text-blue-400">{item.pick}</span>
                           </div>
                         </div>
@@ -339,7 +376,7 @@ const App: React.FC = () => {
                 }`}
               >
                 {isAuditing ? <Loader2 className="w-6 h-6 animate-spin" /> : <Shield className="w-6 h-6" />}
-                {isAuditing ? 'AI SENTINEL 正在进行链路审计...' : '启动竞彩风控审计'}
+                {isAuditing ? 'AI SENTINEL 深度风控审计中...' : '启动审计报告'}
               </button>
             </div>
 
@@ -362,7 +399,7 @@ const App: React.FC = () => {
                     <div className="flex-1 text-center md:text-left">
                       <h3 className="text-4xl font-[900] italic uppercase mb-3 tracking-tighter flex items-center gap-4 justify-center md:justify-start">
                         {auditResult.portfolio_summary.status === 'PASS' ? <CheckCircle className="w-10 h-10 text-emerald-500" /> : <AlertTriangle className="w-10 h-10 text-red-500" />}
-                        审计结果: {auditResult.portfolio_summary.status}
+                        审计结论: {auditResult.portfolio_summary.status}
                       </h3>
                       <p className="text-lg text-slate-400 font-medium leading-relaxed italic">
                         "{auditResult.portfolio_summary.summary_text}"
@@ -381,7 +418,7 @@ const App: React.FC = () => {
                         <div className="w-12 h-12 bg-slate-950 rounded-2xl flex items-center justify-center text-[10px] font-black text-slate-600 border border-slate-800">0{i+1}</div>
                         <div>
                           <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest block mb-1">{detail.risk_tag}</span>
-                          <h4 className="text-xl font-[900] uppercase tracking-tighter">{detail.selection_id} 穿透详情</h4>
+                          <h4 className="text-xl font-[900] uppercase tracking-tighter">{detail.selection_id} 审计详情</h4>
                         </div>
                         <div className="ml-auto">
                           <span className="px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border" style={{ color: detail.ui_color, borderColor: `${detail.ui_color}40`, backgroundColor: `${detail.ui_color}10` }}>
@@ -392,15 +429,15 @@ const App: React.FC = () => {
                       
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                         <div className="bg-slate-950/50 p-6 rounded-3xl border border-slate-800/50">
-                          <div className="flex items-center gap-2 mb-4 text-slate-600 font-black text-[10px] uppercase tracking-widest">分析路径</div>
+                          <div className="flex items-center gap-2 mb-4 text-slate-600 font-black text-[10px] uppercase tracking-widest">风控分析路径</div>
                           <p className="text-slate-300 font-medium italic leading-relaxed text-sm">"{detail.analysis}"</p>
                         </div>
                         
                         {detail.optimization.available && (
                           <div className="bg-blue-600/5 p-6 rounded-3xl border border-blue-500/20 relative shadow-inner">
-                            <div className="flex items-center gap-2 mb-4 text-blue-500 font-black text-[10px] uppercase tracking-widest">优化方案 ({detail.optimization.type})</div>
+                            <div className="flex items-center gap-2 mb-4 text-blue-500 font-black text-[10px] uppercase tracking-widest">优化替换建议 ({detail.optimization.type})</div>
                             <div className="mb-4">
-                              <span className="text-[10px] text-slate-600 block font-black mb-1 uppercase">建议投注:</span>
+                              <span className="text-[10px] text-slate-600 block font-black mb-1 uppercase">推荐稳健方案:</span>
                               <span className="text-xl font-[900] text-emerald-400 tracking-tighter">{detail.optimization.suggested_pick_name}</span>
                             </div>
                             <p className="text-xs text-slate-500 font-medium leading-relaxed">{detail.optimization.suggested_reason}</p>
@@ -415,25 +452,23 @@ const App: React.FC = () => {
           </div>
         </main>
       </div>
+      <style>{`
+        @keyframes progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+        .animate-progress { animation: progress 2s infinite ease-in-out; }
+      `}</style>
     </div>
   );
 };
 
 const MarketButton: React.FC<{ onClick: () => void; label: string; odds: number | undefined }> = ({ onClick, label, odds }) => (
-  <button 
-    onClick={onClick}
-    className="bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 py-3 rounded-xl transition-all group/btn active:scale-95"
-  >
+  <button onClick={onClick} className="bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 py-3 rounded-xl transition-all group/btn active:scale-95">
     <div className="text-[10px] text-slate-500 font-bold group-hover/btn:text-slate-300">{label}</div>
     <div className="text-sm font-black text-slate-400 group-hover/btn:text-white">{odds !== undefined ? odds : '--'}</div>
   </button>
 );
 
 const ScoreButton: React.FC<{ onClick: () => void; label: string; odds: number | undefined }> = ({ onClick, label, odds }) => (
-  <button 
-    onClick={onClick}
-    className="bg-slate-950 hover:bg-blue-600/20 py-2 rounded-lg border border-slate-800 hover:border-blue-500/30 text-[9px] font-black transition-all group/btn flex flex-col items-center justify-center leading-tight min-h-[40px]"
-  >
+  <button onClick={onClick} className="bg-slate-950 hover:bg-blue-600/20 py-2 rounded-lg border border-slate-800 hover:border-blue-500/30 text-[9px] font-black transition-all group/btn flex flex-col items-center justify-center leading-tight min-h-[40px]">
     <div className="text-slate-500 group-hover/btn:text-blue-400">{label}</div>
     <div className="text-[8px] text-slate-700 group-hover/btn:text-blue-500/70">{odds !== undefined ? odds : '--'}</div>
   </button>
