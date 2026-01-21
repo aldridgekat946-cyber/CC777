@@ -3,28 +3,34 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { UserSelection, Match, AuditResponse, DataSource } from "../types";
 import { SYSTEM_INSTRUCTION } from "../constants";
 
-const TIMEOUT_MS = 35000; // Increased to 35s to allow for deep search and generation
+const TIMEOUT_MS = 35000;
 
 export const fetchLotteryMatches = async (source: DataSource, onStatusUpdate?: (status: string) => void): Promise<Match[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const today = new Date().toISOString().split('T')[0];
 
   const officialPrompt = `
-    Search for today's (${today}) China Sports Lottery (竞彩足球/篮球) opening matches and odds.
-    Sources: sporttery.cn, 500.com, okooo.com.
+    搜索今天 (${today}) 的中国竞彩足球和篮球开售赛事及赔率。
+    来源: 竞彩网 (sporttery.cn), 500.com, okooo.com.
     
-    Fields needed:
-    1. Football: WDL, Handicap WDL (e.g. -1), Total Goals (0-7+), and as many Correct Scores (1:0, 0:0, 0:1, etc.) as available.
-    2. Basketball: Handicap and Total Points.
-    3. Match ID (e.g. 周一001).
+    要求:
+    1. 足球: 提供胜平负(WDL)、让球胜平负(WDHL)、进球数(0-7+)、以及所有可用的比分(波胆)赔率。
+    2. 篮球: 让分盘和大小分。
+    3. 必须包含竞彩 ID (如 周一001)。
+    4. 所有的球队名称、联赛名称、环境描述必须翻译成【简体中文】。
     
-    Return a JSON array of Match objects. Do not explain, just return the data.
+    以 JSON 数组形式返回 Match 对象，不要包含任何解释。
   `;
 
   const internationalPrompt = `
-    Search for international bookmaker odds (Bet365, Pinnacle) for top matches on ${today}.
-    Provide WDL, Handicap, Total Goals, and Correct Scores.
-    Return a JSON array of Match objects matching the required schema.
+    搜索今天 (${today}) 国际主流博彩公司 (Bet365, Pinnacle) 的顶级赛事赔率。
+    提供 WDL、让球盘、进球数和比分赔率。
+    
+    要求:
+    1. 将国际赔率格式转换为中国竞彩标准。
+    2. 所有的球队、联赛名、趋势描述必须翻译成【简体中文】。
+    
+    以 JSON 数组形式返回 Match 对象。
   `;
 
   const performFetch = async (prompt: string, status: string): Promise<Match[]> => {
@@ -90,17 +96,12 @@ export const fetchLotteryMatches = async (source: DataSource, onStatusUpdate?: (
 
   try {
     const prompt = source === 'OFFICIAL' ? officialPrompt : internationalPrompt;
-    const fetchPromise = performFetch(prompt, source === 'OFFICIAL' ? "正在从官方数据节点获取盘口..." : "正在从国际博彩中心抓取即时数据...");
+    const fetchPromise = performFetch(prompt, source === 'OFFICIAL' ? "正在同步竞彩中心数据..." : "正在链接全球博彩市场数据...");
     const timeoutPromise = new Promise<Match[]>((_, reject) => setTimeout(() => reject(new Error("TIMEOUT")), TIMEOUT_MS));
     
     return await Promise.race([fetchPromise, timeoutPromise]);
   } catch (error: any) {
-    if (error.message === "TIMEOUT") {
-      console.warn("Gemini data fetch timed out. Falling back to internal data.");
-    } else {
-      console.error("Fetch matches error:", error);
-    }
-    return []; // Return empty so App.tsx falls back to mock data
+    return []; 
   }
 };
 
@@ -118,7 +119,7 @@ export const auditPortfolio = async (portfolio: UserSelection[], matches: Match[
 
   const response = await ai.models.generateContent({
     model: "gemini-3-pro-preview",
-    contents: `请审计以下投注：\n组合：${JSON.stringify(portfolio)}\n实时环境数据：${JSON.stringify(matchContext)}`,
+    contents: `请使用【简体中文】审计以下投注：\n组合：${JSON.stringify(portfolio)}\n实时环境数据：${JSON.stringify(matchContext)}`,
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
       responseMimeType: "application/json"
